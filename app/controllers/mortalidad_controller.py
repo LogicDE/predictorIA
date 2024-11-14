@@ -7,7 +7,10 @@ from sklearn.preprocessing import StandardScaler
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
+import plotly.graph_objects as go
+
+
 
 router = APIRouter()
 
@@ -82,39 +85,60 @@ async def predecir():
         # Predicciones con red neuronal
         red_neuronal_model = RedNeuronalModel(input_dim=X_scaled.shape[1])
         predicciones_red_neuronal = red_neuronal_model.predecir(X_scaled)
+        
+        # Convertir las predicciones de la red neuronal a float
+        predicciones_red_neuronal = [float(pred) for pred in predicciones_red_neuronal]
 
-        # Generar gráfico de las predicciones con más espacio entre los puntos
-        fig, ax = plt.subplots(figsize=(12, 6)) # Aumentamos el tamaño de la figura
-        ax.plot(predicciones_regresion, label="Predicciones Regresión", marker='o', markersize=6, linestyle='-', linewidth=2)
-        ax.plot(predicciones_red_neuronal, label="Predicciones Red Neuronal", marker='x', markersize=8, linestyle='--', linewidth=2)
-        ax.set_xlabel("Índice", fontsize=14)
-        ax.set_ylabel("Predicción", fontsize=14)
-        ax.set_title("Comparación de Predicciones", fontsize=16)
-        ax.legend()
+        print("Predicciones Regresión:", predicciones_regresion[:10])  # Imprime los primeros 10 valores
+        print("Predicciones Red Neuronal:", predicciones_red_neuronal[:10])  # Imprime los primeros 10 valores
 
-        # Aumentar el espaciado entre los ticks en el eje X para mayor claridad
-        ax.tick_params(axis='x', labelsize=12)
-        ax.tick_params(axis='y', labelsize=12)
-        fig.tight_layout()  # Ajustar el espaciado de la figura automáticamente
+        # Crear gráfico interactivo con Plotly
+        fig = go.Figure()
 
-        # Guardar el gráfico como imagen
-        image_path = "static/images/predicciones_comparacion.png"
-        fig.savefig(image_path)
-        plt.close(fig)
+        # Agregar la primera línea de predicciones
+        fig.add_trace(go.Scatter(
+            y=predicciones_regresion,
+            mode='markers+lines',
+            name="Predicciones Regresión",
+            marker=dict(size=6, color='blue'),
+            line=dict(width=2, dash='solid')
+        ))
+        
+        # Agregar la segunda línea de predicciones
+        fig.add_trace(go.Scatter(
+            y=predicciones_red_neuronal,
+            mode='markers+lines',
+            name="Predicciones Red Neuronal",
+            marker=dict(size=6, color='orange'),
+            line=dict(width=2, dash='dot')
+        ))
+
+        # Mejorar el diseño
+        fig.update_layout(
+            title="Comparación de Predicciones",
+            xaxis_title="Índice",
+            yaxis_title="Predicción",
+            template="plotly_dark",
+            autosize=True
+        )
+
+        # Guardar el gráfico como un archivo HTML para servirlo
+        image_path = "static/images/predicciones_comparacion.html"
+        fig.write_html(image_path)
 
         return {
             "predicciones_regresion": predicciones_regresion.tolist(),
-            "predicciones_red_neuronal": predicciones_red_neuronal.tolist(),
-            "image_url": f"/static/images/predicciones_comparacion.png"
+            "predicciones_red_neuronal": predicciones_red_neuronal,
+            "image_url": f"/static/images/predicciones_comparacion.html"
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Servir la imagen generada
+# Servir el archivo HTML generado
 @router.get("/static/images/{image_name}")
 async def get_image(image_name: str):
     image_path = f"static/images/{image_name}"
     if os.path.exists(image_path):
-        return FileResponse(image_path)
+        return HTMLResponse(content=open(image_path).read())
     raise HTTPException(status_code=404, detail="Image not found")
