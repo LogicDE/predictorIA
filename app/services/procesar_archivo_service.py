@@ -1,5 +1,6 @@
 import pandas as pd
 from pymongo import MongoClient
+from sklearn.preprocessing import LabelEncoder
 from app.config import settings
 from io import BytesIO
 
@@ -63,3 +64,33 @@ class ProcesarArchivoService:
             return inserted_ids  # Retorna los IDs como cadenas
         except Exception as e:
             raise ValueError(f"Error al insertar los datos en MongoDB: {str(e)}")
+        
+    @staticmethod
+    def cargar_datos_mongo():
+        try:
+            # Conectar a MongoDB
+            client = MongoClient(settings.mongo_uri)
+            db = client["sistemaPredic"]
+            collection = db["Datos_dengue"]
+
+            # Obtener todos los documentos y convertir a DataFrame
+            datos = list(collection.find())
+            df = pd.DataFrame(datos)
+
+            # Preprocesamiento de datos
+            df['fec_not'] = pd.to_datetime(df['fec_not'], errors='coerce')
+            df['año'] = df['fec_not'].dt.year
+            df['mes'] = df['fec_not'].dt.month
+            df['día'] = df['fec_not'].dt.day
+            df['día_semana'] = df['fec_not'].dt.weekday
+
+            # Codificación de variables categóricas
+            le = LabelEncoder()
+            df['sexo_'] = le.fit_transform(df['sexo_'])
+            df['tip_ss_'] = le.fit_transform(df['tip_ss_'])
+
+            # Seleccionar columnas para entrenamiento
+            df = df[['edad_', 'semana', 'año', 'mes', 'día', 'día_semana', 'sexo_', 'tip_ss_']]
+            return df
+        except Exception as e:
+            raise ValueError(f"Error al cargar y procesar datos de MongoDB: {str(e)}")

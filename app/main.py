@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse
 from io import BytesIO
 from app.services.procesar_archivo_service import ProcesarArchivoService  # Asegúrate de que el import sea correcto
+from app.controllers import mortalidad_controller
 
 app = FastAPI()
 
@@ -47,3 +48,5 @@ async def cargar_datos_xls(archivo: UploadFile = File(...), limite: int = 100):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al procesar el archivo: {str(e)}")
+
+app.include_router(mortalidad_controller.router)
