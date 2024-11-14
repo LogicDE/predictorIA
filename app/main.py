@@ -2,82 +2,45 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse
 import pandas as pd
 from io import BytesIO
-from typing import List
-
-from app.services.database import get_database
-from app.services.data_processing import normalizar_datos
 
 app = FastAPI()
 
-# Especificar las columnas requeridas y sus posibles variaciones
-COLUMNAS_REQUERIDAS = {
-    "fec_not": ["fec_not", "FEC_NOT"],
-    "semana": ["semana", "SEMANA"],
-    "año": ["año", "AÑO"],
-    "edad_": ["edad_", "edad", "EDAD_"],
-    "uni_med_": ["uni_med_", "uni_med", "UNI_MED_"],
-    "sexo_": ["sexo_", "sexo", "SEXO"],
-    "cod_dpto_o": ["cod_dpto_o", "COD_DPTO_O"],
-    "cod_mun_o": ["cod_mun_o", "COD_MUN_O"],
-    "tip_ss_": ["tip_ss_", "tip_ss", "ESTADO_P"]  # Incluye ESTADO_P como nombre alternativo
-}
-
-@app.post("/cargar-datos/", response_description="Carga de datos desde archivos Excel o CSV a MongoDB")
-async def cargar_datos(archivos: List[UploadFile] = File(...)):
-    collection = get_database()  # Accedemos directamente a la colección
-    
-    datos_completos = []  # Lista para acumular los datos procesados de cada archivo
-
-    for archivo in archivos:
-        if not archivo.filename.endswith((".xlsx", ".xls", ".csv", ".xlsm")):
-            raise HTTPException(status_code=400, detail="Solo se permiten archivos de Excel o CSV.")
-        
+class ProcesarArchivoService:
+    @staticmethod
+    def cargar_datos(archivo: BytesIO) -> pd.DataFrame:
+        # Cargar el archivo en un DataFrame
         try:
-            # Leer el archivo según su tipo
-            contenido = await archivo.read()
-            if archivo.filename.endswith((".xlsx", ".xls", ".xlsm")):
-                datos = pd.read_excel(BytesIO(contenido))
-            elif archivo.filename.endswith(".csv"):
-                datos = pd.read_csv(BytesIO(contenido))
-
-            # Convertir nombres de columnas a minúsculas para facilitar la coincidencia
-            datos.columns = [col.lower() for col in datos.columns]
-
-            # Crear un diccionario de coincidencias de columnas
-            columnas_mapeadas = {}
-            for col_requerida, nombres_posibles in COLUMNAS_REQUERIDAS.items():
-                for nombre in nombres_posibles:
-                    if nombre.lower() in datos.columns:
-                        columnas_mapeadas[col_requerida] = nombre.lower()
-                        break
-
-            # Verificar si todas las columnas requeridas están presentes
-            columnas_faltantes = set(COLUMNAS_REQUERIDAS) - set(columnas_mapeadas)
-            if columnas_faltantes:
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"Columnas faltantes en el archivo {archivo.filename}: {', '.join(columnas_faltantes)}"
-                )
-
-            # Renombrar las columnas mapeadas en `datos` para que usen los nombres estandarizados
-            datos.rename(columns=columnas_mapeadas, inplace=True)
-
-            # Filtrar las columnas necesarias con nombres estandarizados
-            datos_filtrados = datos[list(COLUMNAS_REQUERIDAS.keys())]
-
-            # Convertir los datos a un formato JSON para insertarlos en MongoDB
-            datos_json = normalizar_datos(datos_filtrados)
-            datos_completos.extend(datos_json)  # Acumular datos de todos los archivos procesados
-
+            # Intentamos leer el archivo según su tipo
+            df = pd.read_excel(archivo, engine='openpyxl')  # Usar openpyxl para archivos .xlsx y .xlsm
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error al procesar el archivo {archivo.filename}: {str(e)}")
+            raise ValueError(f"Error al leer el archivo Excel: {str(e)}")
+        
+        # Limpieza de datos nulos
+        df.fillna('', inplace=True)  # Rellena nulos con cadenas vacías
+        
+        # Asegurarse de que los tipos de datos sean compatibles
+        for col in df.select_dtypes(include=['float64']).columns:
+            df[col] = df[col].astype(str)  # Convierte a cadena si la columna es float64
+        
+        # Convertir columnas datetime a string
+        for col in df.select_dtypes(include=['datetime']).columns:
+            df[col] = df[col].dt.strftime('%Y-%m-%d %H:%M:%S')  # Formato de fecha y hora en string
 
-    # Intentar insertar todos los datos acumulados en MongoDB
+        return df
+
+# Endpoint de FastAPI
+@app.post("/cargar-datos/", response_description="Carga de datos desde archivos Excel o CSV")
+async def cargar_datos(archivo: UploadFile = File(...), limite: int = 100):
     try:
-        result = collection.insert_many(datos_completos)
-        if result.inserted_ids:
-            return {"mensaje": "Datos cargados exitosamente en MongoDB", "ids_insertados": str(result.inserted_ids)}
-        else:
-            raise HTTPException(status_code=500, detail="No se insertaron datos en MongoDB.")
+        # Leemos el archivo cargado
+        contenido = await archivo.read()
+        archivo_bytes = BytesIO(contenido)
+        
+        # Procesamos el archivo usando la clase ProcesarArchivoService
+        df = ProcesarArchivoService.cargar_datos(archivo_bytes)
+        
+        # Devolvemos las primeras filas (limitadas por el parámetro limite)
+        return JSONResponse(content={"datos": df.head(limite).to_dict(orient="records")})
+    
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al insertar datos en MongoDB: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error al procesar el archivo: {str(e)}")
