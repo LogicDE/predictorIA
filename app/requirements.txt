@@ -4,5 +4,10 @@ uvicorn
 pymongo
 pandas
 python-dotenv
-
-
+plotly
+matplotlib
+tensorflow
+scikit-learn
+openpyxl
+python-magic
+xlrd  
