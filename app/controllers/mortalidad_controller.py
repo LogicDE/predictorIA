@@ -1,3 +1,5 @@
+import json
+from urllib.request import urlopen
 from fastapi import APIRouter, HTTPException
 from app.services.procesar_archivo_service import ProcesarArchivoService
 from app.models.regresion_model import RegresionModel
@@ -274,7 +276,6 @@ async def dashboard():
             fig_regimen.write_html(regimen_path)
         else:
             regimen_path = None
-
         return {
             "estadisticas": estadisticas,
             "graficos": {
@@ -284,11 +285,114 @@ async def dashboard():
                 "distribucion_eventos": f"/{evento_path}" if evento_path else None,
                 "distribucion_sintomas": f"/{sintomas_path}" if sintomas_path else None,
                 "distribucion_geografica": f"/{geografia_path}" if geografia_path else None,
-                "relacion_regimen_salud": f"/{regimen_path}" if regimen_path else None
+                "relacion_regimen_salud": f"/{regimen_path}" if regimen_path else None,
             }
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generando el dashboard: {str(e)}")
+    
+
+@router.get("/dashboard/mapa_colombia/")
+async def mapa_colombia():
+    try:
+        # 1. Cargar datos desde MongoDB
+        df = ProcesarArchivoService.cargar_datos_mongo()
+
+        # Validar columnas necesarias
+        required_columns = {'cod_dpto_o', 'cod_mun_o', 'area_', 'localidad_', 'nmun_proce'}
+        if not all(col in df.columns for col in required_columns):
+            missing_cols = [col for col in required_columns if col not in df.columns]
+            raise HTTPException(status_code=400, detail=f"Faltan columnas: {', '.join(missing_cols)}")
+
+        # 2. Cargar GeoJSON de Colombia
+        try:
+            with urlopen(
+                "https://gist.githubusercontent.com/john-guerra/43c7656821069d00dcbc/raw/be6a6e239cd5b5b803c6e7c2ec405b793a9064dd/Colombia.geo.json", timeout=10
+            ) as response:
+                if response.status != 200:
+                    raise HTTPException(status_code=400, detail="No se pudo cargar el GeoJSON correctamente.")
+                geojson_colombia = json.load(response)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error al cargar GeoJSON: {str(e)}")
+
+        # Asignar IDs a los departamentos en el GeoJSON
+        for feature in geojson_colombia['features']:
+            feature['id'] = feature['properties']['NOMBRE_DPT']
+
+        # 3. Filtrar datos para el Cesar
+        locs = ['CESAR']  # Nombres de los departamentos que deseas mostrar
+        cesar_data = df[df['cod_dpto_o'] == 20]  # Filtrar los datos para el Cesar
+
+        # 4. Calcular el valor promedio de área_ para el Cesar
+        area_counts = cesar_data['area_'].value_counts()  # Contar la ocurrencia de cada tipo de área
+
+        # Calcular el promedio ponderado basado en las ocurrencias de cada tipo de área
+        area_values = {1: 'Cabecera Municipal', 2: 'Centro Poblado', 3: 'Rural Disperso'}
+        z_values = [
+            area_counts.get(1, 0),  # Ocurrencias de Cabecera Municipal
+            area_counts.get(2, 0),  # Ocurrencias de Centro Poblado
+            area_counts.get(3, 0)   # Ocurrencias de Rural Disperso
+        ]
+
+        # Verificar si las ocurrencias están presentes para evitar el error de NoneType
+        max_area_type = max(
+            [(area_counts.get(1, 0), 1), (area_counts.get(2, 0), 2), (area_counts.get(3, 0), 3)],
+            key=lambda x: x[0],
+            default=(0, None)
+        )[1]  # Obtiene el tipo de área con la mayor ocurrencia
+
+        max_area_name = area_values.get(max_area_type, 'Desconocido')
+
+        # Crear un texto que indique cuál es la zona más afectada
+        report_text = f"""
+        <b>Informe del Departamento del Cesar:</b><br>
+        Total de Municipios: {cesar_data['cod_mun_o'].nunique()}<br>
+        Localidades Procesadas: {cesar_data['localidad_'].nunique()}<br>
+        Procesos Totales: {cesar_data['nmun_proce'].sum()}<br><br>
+        Zona más afectada: <b>{max_area_name}</b> (con {area_counts.get(max_area_type, 0)} ocurrencias)
+        """
+
+        # 5. Crear el mapa interactivo con la anotación de informe
+        fig = go.Figure(go.Choroplethmapbox(
+            geojson=geojson_colombia,
+            locations=locs,  # Departamento(s) a pintar
+            z=z_values,  # Métrica a visualizar basada en áreas
+            colorscale="Viridis",
+            colorbar_title="Frecuencia de Áreas",
+            marker_opacity=0.6,
+            marker_line_width=0
+        ))
+
+        # Añadir la anotación del informe en el mapa
+        fig.update_layout(
+            mapbox_style="carto-positron",
+            mapbox_zoom=7,  # Ajustar zoom para centrarse en el Cesar
+            mapbox_center={"lat": 9.3373, "lon": -73.6536},  # Coordenadas del Cesar
+            title="Mapa Interactivo del Departamento de Cesar",
+            annotations=[ 
+                go.layout.Annotation(
+                    text=report_text,  # El texto del informe
+                    x=0.5,  # Posición horizontal (en el medio)
+                    y=0.95,  # Posición vertical (cerca de la parte superior)
+                    showarrow=False,  # No se necesita flecha
+                    font=dict(size=14, color="black"),
+                    align="center",
+                    bgcolor="white",  # Fondo blanco
+                    borderpad=10,  # Espaciado del borde
+                    bordercolor="black",  # Color del borde
+                    borderwidth=2  # Grosor del borde
+                )
+            ]
+        )
+
+        # Guardar el mapa como archivo HTML
+        mapa_path = "static/images/mapa_cesar.html"
+        fig.write_html(mapa_path)
+
+        return {"mapa_url": f"/{mapa_path}"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generando el mapa: {str(e)}")
 
 
 
