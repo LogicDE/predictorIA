@@ -5,12 +5,14 @@ from app.services.procesar_archivo_service import ProcesarArchivoService
 from app.models.regresion_model import RegresionModel
 from app.models.red_neuronal_model import RedNeuronalModel
 from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.model_selection import train_test_split
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
 from fastapi.responses import FileResponse, HTMLResponse
 import plotly.graph_objects as go
+import plotly.express as px
 
 
 
@@ -27,36 +29,68 @@ async def entrenar_modelos():
         df = ProcesarArchivoService.cargar_datos_mongo()
         print("Columnas del DataFrame:", df.columns)
 
-        # Crear la columna 'objetivo'
-        df['objetivo'] = df['edad_']
+        # Seleccionar las columnas necesarias para el entrenamiento
+        columnas_sintomas = [
+            "fiebre", "cefalea", "dolrretroo", "malgias", "artralgia", "erupcionr",
+            "dolor_abdo", "vomito", "diarrea", "somnolenci", "hipotensio", "hepatomeg",
+            "hem_mucosa", "hipotermia", "aum_hemato", "caida_plaq", "acum_liqui",
+            "extravasac", "hemorr_hem", "choque", "daño_organ", "clasfinal"
+        ]
+        columnas_adicionales = ["edad_", "sexo_", "tip_ss_", "estrato_", "conducta"]
 
-        # Asegurarse de que la columna 'objetivo' está presente
-        if 'objetivo' not in df.columns:
-            raise HTTPException(status_code=400, detail="Columna 'objetivo' no encontrada en los datos")
+        # Filtrar columnas requeridas
+        df = df[columnas_sintomas + columnas_adicionales]
 
-        # Imputar valores faltantes con la media
-        imputer = SimpleImputer(strategy='mean')
-        df_imputado = pd.DataFrame(imputer.fit_transform(df), columns=df.columns)
+        # Validar y convertir las columnas numéricas
+        columnas_numericas = ["edad_", "estrato_"] + columnas_sintomas
+        for col in columnas_numericas:
+            df[col] = pd.to_numeric(df[col], errors='coerce')  # Convertir a numérico
 
-        # Separar las características (X) y el objetivo (y)
-        X = df_imputado.drop('objetivo', axis=1)
-        y = df_imputado['objetivo']
+        # Validar y procesar columnas categóricas
+        columnas_categoricas = ["sexo_", "tip_ss_", "conducta"]
+        for col in columnas_categoricas:
+            df[col] = df[col].astype(str).str.strip()  # Asegurar que sean cadenas válidas
 
-        # Normalizar los datos
+        # Imputar valores faltantes
+        imputer_num = SimpleImputer(strategy="mean")
+        imputer_cat = SimpleImputer(strategy="most_frequent")
+
+        # Imputar en columnas numéricas
+        df[columnas_numericas] = imputer_num.fit_transform(df[columnas_numericas])
+
+        # Imputar en columnas categóricas
+        df[columnas_categoricas] = imputer_cat.fit_transform(df[columnas_categoricas])
+
+        # Codificar variables categóricas
+        encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
+        cat_features = ["sexo_", "tip_ss_"]
+        encoded_features = pd.DataFrame(encoder.fit_transform(df[cat_features]), columns=encoder.get_feature_names_out(cat_features))
+
+        # Combinar datos codificados y numéricos
+        df = pd.concat([df.drop(cat_features, axis=1), encoded_features], axis=1)
+
+        # Separar características (X) y objetivo (clasfinal)
+        X = df.drop("clasfinal", axis=1)
+        y = df["clasfinal"]
+
+        # Escalar características
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
 
-        # Entrenar el modelo de regresión
-        regresion_model = RegresionModel()
-        regresion_model.entrenar(X_scaled, y)
+        # Dividir los datos en conjuntos de entrenamiento y prueba
+        X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
 
-        # Entrenar la red neuronal
-        red_neuronal_model = RedNeuronalModel(input_dim=X_scaled.shape[1])
-        red_neuronal_model.entrenar(X_scaled, y)
+        # Entrenar modelos
+        regresion_model = RegresionModel()
+        regresion_model.entrenar(X_train, y_train)
+
+        red_neuronal_model = RedNeuronalModel(input_dim=X_train.shape[1])
+        red_neuronal_model.entrenar(X_train, y_train)
 
         return {"message": "Modelos entrenados exitosamente"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Error en el entrenamiento: {str(e)}")
+
 
 @router.post("/predecir/")
 async def predecir():
@@ -64,64 +98,63 @@ async def predecir():
         # Cargar los datos desde MongoDB
         df = ProcesarArchivoService.cargar_datos_mongo()
 
-        # Crear la columna 'objetivo'
-        df['objetivo'] = df['edad_']
+        # Asegurarse de que los datos estén preprocesados correctamente
+        columnas_sintomas = [
+            "fiebre", "cefalea", "dolrretroo", "malgias", "artralgia", "erupcionr",
+            "dolor_abdo", "vomito", "diarrea", "somnolenci", "hipotensio", "hepatomeg",
+            "hem_mucosa", "hipotermia", "aum_hemato", "caida_plaq", "acum_liqui",
+            "extravasac", "hemorr_hem", "choque", "daño_organ"
+        ]
+        columnas_adicionales = ["edad_", "sexo_", "tip_ss_", "estrato_", "conducta"]
+        
+        # Filtrar las columnas necesarias para la predicción (sin 'clasfinal')
+        df = df[columnas_sintomas + columnas_adicionales]
 
-        # Asegurarse de que la columna 'objetivo' está presente
-        if 'objetivo' not in df.columns:
-            raise HTTPException(status_code=400, detail="Columna 'objetivo' no encontrada en los datos")
+        # Validar y convertir las columnas numéricas
+        columnas_numericas = ["edad_", "estrato_"] + columnas_sintomas
+        for col in columnas_numericas:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        # Imputar valores faltantes con la media
-        imputer = SimpleImputer(strategy='mean')
-        df_imputado = pd.DataFrame(imputer.fit_transform(df), columns=df.columns)
+        # Validar y procesar columnas categóricas
+        columnas_categoricas = ["sexo_", "tip_ss_", "conducta"]
+        for col in columnas_categoricas:
+            df[col] = df[col].astype(str).str.strip()
 
-        # Normalizar los datos
+        # Imputar valores faltantes
+        imputer_num = SimpleImputer(strategy="mean")
+        df[columnas_numericas] = imputer_num.fit_transform(df[columnas_numericas])
+
+        imputer_cat = SimpleImputer(strategy="most_frequent")
+        df[columnas_categoricas] = imputer_cat.fit_transform(df[columnas_categoricas])
+
+        # Codificar variables categóricas
+        encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
+        cat_features = ["sexo_", "tip_ss_"]
+        encoded_features = pd.DataFrame(encoder.fit_transform(df[cat_features]), columns=encoder.get_feature_names_out(cat_features))
+
+        df = pd.concat([df.drop(cat_features, axis=1), encoded_features], axis=1)
+
+        # Separar características para predicción
+        X = df.drop(columns=["clasfinal"], axis=1, errors='ignore')  # No eliminar "clasfinal" si no está presente
         scaler = StandardScaler()
-        X = df_imputado.drop('objetivo', axis=1)
         X_scaled = scaler.fit_transform(X)
 
-        # Predicciones con regresión
+        # Cargar los modelos entrenados
         regresion_model = RegresionModel()
-        predicciones_regresion = regresion_model.predecir(X_scaled)
-
-        # Predicciones con red neuronal
-        red_neuronal_model = RedNeuronalModel(input_dim=X_scaled.shape[1])
-        predicciones_red_neuronal = red_neuronal_model.predecir(X_scaled)
+        predicciones_regresion = regresion_model.predecir(X_scaled)  # Aquí se carga el modelo dentro de predecir
         
+        red_neuronal_model = RedNeuronalModel(input_dim=X_scaled.shape[1])
+        predicciones_red_neuronal = red_neuronal_model.predecir(X_scaled)  # Aquí se carga el modelo dentro de predecir
+
         # Convertir las predicciones de la red neuronal a float
         predicciones_red_neuronal = [float(pred) for pred in predicciones_red_neuronal]
 
-        print("Predicciones Regresión:", predicciones_regresion[:10])  # Imprime los primeros 10 valores
-        print("Predicciones Red Neuronal:", predicciones_red_neuronal[:10])  # Imprime los primeros 10 valores
-
-        # Crear gráfico interactivo con Plotly
-        fig = go.Figure()
-
-        # Agregar la primera línea de predicciones
-        fig.add_trace(go.Scatter(
-            y=predicciones_regresion,
-            mode='markers+lines',
-            name="Predicciones Regresión",
-            marker=dict(size=6, color='blue'),
-            line=dict(width=2, dash='solid')
-        ))
-        
-        # Agregar la segunda línea de predicciones
-        fig.add_trace(go.Scatter(
-            y=predicciones_red_neuronal,
-            mode='markers+lines',
-            name="Predicciones Red Neuronal",
-            marker=dict(size=6, color='orange'),
-            line=dict(width=2, dash='dot')
-        ))
-
-        # Mejorar el diseño
-        fig.update_layout(
-            title="Comparación de Predicciones",
-            xaxis_title="Índice",
-            yaxis_title="Predicción",
-            template="plotly_dark",
-            autosize=True
+        # Crear un gráfico de comparación entre las predicciones
+        fig = px.scatter(
+            x=predicciones_regresion, 
+            y=predicciones_red_neuronal, 
+            labels={'x': 'Predicciones Regresión', 'y': 'Predicciones Red Neuronal'},
+            title="Comparación de Predicciones: Regresión vs Red Neuronal"
         )
 
         # Guardar el gráfico como un archivo HTML para servirlo
@@ -163,11 +196,21 @@ async def dashboard():
 
         # 2. Distribución por sexo
         if 'sexo_' in df.columns:
+            # Asegúrate de que los valores sean F y M en lugar de 0 y 1
+            df['sexo_'] = df['sexo_'].replace({0: 'M', 1: 'F'})  # Asumiendo que 0 es Masculino y 1 es Femenino
+    
+            # Obtener el conteo de las categorías
             sexo_counts = df['sexo_'].value_counts()
+    
+            # Crear la gráfica de pastel (Pie chart)
             fig_sexo = go.Figure(data=[go.Pie(labels=sexo_counts.index, values=sexo_counts.values)])
+    
+            # Personalizar el diseño de la gráfica
             fig_sexo.update_layout(
                 title="Distribución por Sexo"
             )
+    
+            # Guardar la gráfica como un archivo HTML
             sexo_path = "static/images/distribucion_sexo.html"
             fig_sexo.write_html(sexo_path)
         else:
@@ -276,6 +319,7 @@ async def dashboard():
             fig_regimen.write_html(regimen_path)
         else:
             regimen_path = None
+
         return {
             "estadisticas": estadisticas,
             "graficos": {
@@ -393,9 +437,6 @@ async def mapa_colombia():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generando el mapa: {str(e)}")
-
-
-
 
 # Servir el archivo HTML generado
 @router.get("/static/images/{image_name}")
