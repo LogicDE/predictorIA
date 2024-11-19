@@ -159,7 +159,7 @@ async def predecir():
 
         # Guardar el gráfico como un archivo HTML para servirlo
         image_path = "static/images/predicciones_comparacion.html"
-        fig.write_html(image_path)
+        fig.write_html(image_path, include_plotlyjs=True, config={'responsive': True})
 
         return {
             "predicciones_regresion": predicciones_regresion.tolist(),
@@ -169,7 +169,7 @@ async def predecir():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 
 @router.get("/dashboard/")
 async def dashboard():
