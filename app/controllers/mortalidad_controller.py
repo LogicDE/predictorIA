@@ -412,7 +412,7 @@ async def mapa_colombia():
             mapbox_style="carto-positron",
             mapbox_zoom=7,  # Ajustar zoom para centrarse en el Cesar
             mapbox_center={"lat": 9.3373, "lon": -73.6536},  # Coordenadas del Cesar
-            title="Mapa Interactivo del Departamento de Cesar",
+            title="Mapa Interactivo del Departamento del Cesar",
             annotations=[ 
                 go.layout.Annotation(
                     text=report_text,  # El texto del informe
